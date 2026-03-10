@@ -1,41 +1,200 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <title>Cesium 3D Tileset Viewer</title>
   <script src="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Cesium.js"></script>
   <link href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
     html, body, #cesiumContainer {
       width: 100%;
       height: 100%;
-      margin: 0;
-      padding: 0;
       overflow: hidden;
+      background: #000;
+    }
+
+    /* ── HUD Stats Panel ── */
+    #statsPanel {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 200;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 12px;
+      color: #a8f0c6;
+      background: rgba(0, 8, 4, 0.78);
+      border: 1px solid rgba(0, 255, 120, 0.25);
+      border-radius: 4px;
+      padding: 12px 16px;
+      min-width: 220px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 0 18px rgba(0, 255, 100, 0.08), inset 0 0 12px rgba(0,0,0,0.4);
+      pointer-events: none;
+      animation: fadeIn 0.6s ease both;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    #statsPanel .hud-title {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(0, 255, 120, 0.5);
+      margin-bottom: 10px;
+      border-bottom: 1px solid rgba(0, 255, 120, 0.12);
+      padding-bottom: 6px;
+    }
+
+    #statsPanel .stat-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      line-height: 1.9;
+    }
+
+    #statsPanel .stat-label {
+      color: rgba(168, 240, 198, 0.55);
+    }
+
+    #statsPanel .stat-value {
+      color: #d0ffe8;
+      font-weight: bold;
+      text-align: right;
+      min-width: 60px;
+      transition: color 0.2s;
+    }
+
+    /* pulse green when value changes */
+    #statsPanel .stat-value.updated {
+      color: #00ff88;
+    }
+
+    /* status dot */
+    #statsPanel .status-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #00ff88;
+      margin-right: 6px;
+      animation: pulse 2s ease-in-out infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
     }
   </style>
 </head>
-
 <body>
+
 <div id="cesiumContainer"></div>
 
+<!-- Single, unified stats panel -->
+<div id="statsPanel">
+  <div class="hud-title"><span class="status-dot"></span>Tileset Statistics</div>
+  <div class="stat-row"><span class="stat-label">Tiles Loaded</span>    <span class="stat-value" id="statLoaded">—</span></div>
+  <div class="stat-row"><span class="stat-label">Tiles Rendered</span>  <span class="stat-value" id="statRendered">—</span></div>
+  <div class="stat-row"><span class="stat-label">Triangles</span>        <span class="stat-value" id="statTriangles">—</span></div>
+  <div class="stat-row"><span class="stat-label">FPS</span>              <span class="stat-value" id="statFps">—</span></div>
+</div>
+
 <script>
+  Cesium.Ion.defaultAccessToken =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3MzZhODMzMS03OTUyLTQwZGUtYjhjYy02Njg0N2E1ZjJkYWEiLCJpZCI6Mzk3MDQ5LCJpYXQiOjE3NzI1MTYyNzR9.ZeK60HbydDaCpWyK3H5JQw8BqRyNUtSfWNdMnroD2hc";
 
-Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI3MzZhODMzMS03OTUyLTQwZGUtYjhjYy02Njg0N2E1ZjJkYWEiLCJpZCI6Mzk3MDQ5LCJpYXQiOjE3NzI1MTYyNzR9.ZeK60HbydDaCpWyK3H5JQw8BqRyNUtSfWNdMnroD2hc";
+  // ── Viewer ──────────────────────────────────────────────────────────────
+  const viewer = new Cesium.Viewer("cesiumContainer", {
+    terrain: Cesium.Terrain.fromWorldTerrain(),
+    // Clean UI — hide unused toolbar widgets
+    animation: false,
+    timeline: false,
+    geocoder: false,
+    homeButton: true,
+    sceneModePicker: true,
+    baseLayerPicker: false,
+    navigationHelpButton: false,
+    fullscreenButton: false,
+  });
 
-const viewer = new Cesium.Viewer("cesiumContainer");
+  // ── Stat DOM refs ────────────────────────────────────────────────────────
+  const elLoaded    = document.getElementById("statLoaded");
+  const elRendered  = document.getElementById("statRendered");
+  const elTriangles = document.getElementById("statTriangles");
+  const elFps       = document.getElementById("statFps");
 
-async function start() {
+  /** Flash a value element green briefly when it changes */
+  function setStatValue(el, value) {
+    const formatted = typeof value === "number" ? value.toLocaleString() : value;
+    if (el.textContent !== String(formatted)) {
+      el.textContent = formatted;
+      el.classList.add("updated");
+      setTimeout(() => el.classList.remove("updated"), 200);
+    }
+  }
 
-  const tileset = await Cesium.Cesium3DTileset.fromIonAssetId(4509455);
+  // ── Triangle count via scene commands (stable, no private API) ───────────
+  function countTriangles(scene) {
+    let total = 0;
+    const commands = scene.frameState.commandList;
+    for (let i = 0; i < commands.length; i++) {
+      const cmd = commands[i];
+      if (cmd && cmd.count != null) {
+        // Each index typically represents one triangle vertex group
+        total += Math.floor(cmd.count / 3);
+      }
+    }
+    return total;
+  }
 
-  viewer.scene.primitives.add(tileset);
+  // ── FPS tracker ──────────────────────────────────────────────────────────
+  let lastTime = performance.now();
+  let frameCount = 0;
+  let fps = 0;
 
-  viewer.zoomTo(tileset);
+  // ── Load 3D Tileset ──────────────────────────────────────────────────────
+  async function loadTileset() {
+    let tileset;
+    try {
+      tileset = await Cesium.Cesium3DTileset.fromIonAssetId(4514758);
+    } catch (err) {
+      console.error("Failed to load tileset:", err);
+      return;
+    }
 
-}
+    viewer.scene.primitives.add(tileset);
+    viewer.zoomTo(tileset);
 
-start();
+    // Show LOD bounding volumes for debugging
+    tileset.debugShowBoundingVolume = true;
 
+    // ── Per-frame stats update ─────────────────────────────────────────────
+    viewer.scene.postRender.addEventListener(() => {
+      const now = performance.now();
+      frameCount++;
+      const elapsed = now - lastTime;
+
+      if (elapsed >= 500) {               // update FPS every 0.5 s
+        fps = Math.round((frameCount / elapsed) * 1000);
+        frameCount = 0;
+        lastTime = now;
+      }
+
+      setStatValue(elLoaded,    tileset.statistics.numberOfTilesLoaded);
+      setStatValue(elRendered,  tileset.statistics.numberOfTilesRendered);
+      setStatValue(elTriangles, countTriangles(viewer.scene));
+      setStatValue(elFps,       fps + " fps");
+    });
+  }
+
+  loadTileset();
 </script>
-
 </body>
 </html>
